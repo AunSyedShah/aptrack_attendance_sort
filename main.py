@@ -39,3 +39,7 @@ uploaded_file = st.file_uploader("Choose an Excel file", type=["xls"])
 
 if uploaded_file is not None:
     sort_attendance(uploaded_file)
+
+# Footer
+st.markdown("---")
+st.markdown("<p style='text-align: center;'>Developed with ❤️ by Syed Aun Muhammad</p>", unsafe_allow_html=True)
