@@ -15,7 +15,7 @@ def sort_attendance(uploaded_file):
             df.columns = df.columns.str.strip()
             
             # Drop unwanted columns
-            columns_to_exclude = ["Sr. No", "Center", "Student Signature", "Remark"]
+            columns_to_exclude = ["Sr. No.", "Center", "Student Signature", "Remark"]
             df = df.drop(columns=[col for col in columns_to_exclude if col in df.columns], errors='ignore')
             
             # Check if required columns are present
