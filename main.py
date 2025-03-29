@@ -8,8 +8,12 @@ st.set_page_config(layout="wide")
 def sort_attendance(uploaded_file):
     if uploaded_file is not None:
         try:
+            # Determine the file extension and select the appropriate engine
+            file_extension = uploaded_file.name.split(".")[-1].lower()
+            engine = "xlrd" if file_extension == "xls" else "openpyxl"
+            
             # Read the Excel file, skipping the first six rows
-            df = pd.read_excel(uploaded_file, skiprows=6)
+            df = pd.read_excel(uploaded_file, skiprows=6, engine=engine)
             
             # Strip any leading or trailing spaces from column names
             df.columns = df.columns.str.strip()
@@ -56,6 +60,13 @@ def sort_attendance(uploaded_file):
             # Display the sorted, filtered, and selected columns result in wide format
             st.write("### Sorted, Filtered, and Selected Columns Attendance Record:")
             st.dataframe(df_sorted[selected_columns], width=1500)
+            
+            # Create another DataFrame for summary view
+            summary_df = df.drop_duplicates(subset=["Student ID", "Date"]).groupby(["Student ID", "Student Name"], as_index=False).agg(Classes_Taken=("Date", "count"))
+            
+            # Display the summary dataframe
+            st.write("### Summary: Student Attendance Record")
+            st.dataframe(summary_df, width=800)
         
         except Exception as e:
             st.error(f"An error occurred: {e}")
@@ -64,7 +75,7 @@ def sort_attendance(uploaded_file):
 st.title("Student Attendance Sorter")
 st.write("Upload an Excel file to sort and filter attendance records in real-time.")
 
-uploaded_file = st.file_uploader("Choose an Excel file", type=["xls"])
+uploaded_file = st.file_uploader("Choose an Excel file", type=["xls", "xlsx"])
 
 if uploaded_file is not None:
     sort_attendance(uploaded_file)
