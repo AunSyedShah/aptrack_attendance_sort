@@ -32,7 +32,7 @@ def process_attendance(attendance_file, extra_session_file):
             attendance_df["Date"] = pd.to_datetime(attendance_df["Date"], errors='coerce')
 
             # Load extra session data
-            extra_session_df = pd.read_excel(extra_session_file,skiprows=4, engine=get_engine(extra_session_file))
+            extra_session_df = pd.read_excel(extra_session_file, skiprows=6, engine=get_engine(extra_session_file))
             extra_session_df.columns = extra_session_df.columns.str.strip()
             if "Extra Session Attendance Date" not in extra_session_df.columns or "Student ID" not in extra_session_df.columns:
                 st.error("Error: Required columns not found in Extra Session File.")
@@ -46,12 +46,21 @@ def process_attendance(attendance_file, extra_session_file):
             batches = attendance_df["Batch"].dropna().unique()
             selected_batch = st.sidebar.selectbox("Select Batch", options=sorted(batches))
 
+            # Sidebar - Student ID Filter
+            student_ids = attendance_df["Student ID"].dropna().unique()
+            selected_student_id = st.sidebar.selectbox("Select Student ID", options=["All"] + list(sorted(student_ids)))
+
             # Filter attendance and extra sessions for selected batch
             batch_attendance = attendance_df[attendance_df["Batch"] == selected_batch]
             batch_extra_sessions = extra_session_df[extra_session_df["Batch"] == selected_batch]
 
+            # Apply Student ID filter
+            if selected_student_id != "All":
+                batch_attendance = batch_attendance[batch_attendance["Student ID"] == selected_student_id]
+                batch_extra_sessions = batch_extra_sessions[batch_extra_sessions["Student ID"] == selected_student_id]
+
             if batch_attendance.empty:
-                st.warning("No attendance records found for the selected Batch.")
+                st.warning("No attendance records found for the selected Batch or Student ID.")
                 return
 
             # Prepare month-wise attendance
@@ -80,7 +89,7 @@ def process_attendance(attendance_file, extra_session_file):
                 for idx, row in month_df.iterrows():
                     student_id = row["Student ID"]
                     date_col = row["Date"].strftime("%-d-%b")
-                    pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "p"
+                    pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "."
 
                 # Mark extra session attendance
                 for idx, row in batch_extra_sessions.iterrows():
@@ -119,7 +128,7 @@ def process_attendance(attendance_file, extra_session_file):
             batch_attendance["unique_attendance_count"] = batch_attendance.drop_duplicates(subset=["Student ID", "Date"]).groupby("Student ID")["Date"].transform("count")
 
             # Show the filtered and processed attendance data in UI
-            st.write(f"### Filtered Attendance Data for Batch: {selected_batch}")
+            st.write(f"### Filtered Attendance Data for Batch: {selected_batch} and Student ID: {selected_student_id}")
             st.dataframe(batch_attendance)
 
         except Exception as e:
