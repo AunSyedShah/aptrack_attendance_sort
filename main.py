@@ -80,7 +80,7 @@ def process_attendance(attendance_file, extra_session_file):
                 for idx, row in month_df.iterrows():
                     student_id = row["Student ID"]
                     date_col = row["Date"].strftime("%-d-%b")
-                    pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "."
+                    pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "p"
 
                 # Mark extra session attendance
                 for idx, row in batch_extra_sessions.iterrows():
