@@ -3,147 +3,143 @@ import streamlit as st
 import numpy as np
 from io import BytesIO
 
-# Set page configuration
 st.set_page_config(layout="wide")
 
-def process_attendance(attendance_file, extra_session_file):
-    if attendance_file is not None and extra_session_file is not None:
-        try:
-            # Determine engine based on file extension
-            def get_engine(file):
-                return "xlrd" if file.name.split(".")[-1].lower() == "xls" else "openpyxl"
-            
-            # Load attendance data
-            attendance_df = pd.read_excel(attendance_file, skiprows=6, engine=get_engine(attendance_file))
-            attendance_df.columns = attendance_df.columns.str.strip()
+def load_excel(file, skiprows):
+    file_extension = file.name.split(".")[-1].lower()
+    engine = "xlrd" if file_extension == "xls" else "openpyxl"
+    df = pd.read_excel(file, skiprows=skiprows, engine=engine)
+    df.columns = df.columns.str.strip()
+    return df
 
-            # Drop unwanted columns
-            columns_to_exclude = ["Sr. No.", "Center", "Student Signature", "Remark"]
-            attendance_df = attendance_df.drop(columns=[col for col in columns_to_exclude if col in attendance_df.columns], errors='ignore')
+def display_filtered_attendance(df):
+    st.sidebar.write("### Filter Options")
+    student_id_filter = st.sidebar.text_input("Filter by Student ID")
+    student_name_filter = st.sidebar.text_input("Filter by Student Name")
+    faculty_filter = st.sidebar.text_input("Filter by Faculty")
 
-            # Ensure required columns exist
-            required_columns = ["Student ID", "Student Name", "Date", "Batch", "Faculty"]
-            for col in required_columns:
-                if col not in attendance_df.columns:
-                    st.error(f"Error: Required column '{col}' not found in Attendance File.")
-                    return
+    df_sorted = df.sort_values(by=["Student ID", "Student Name"], ascending=True)
 
-            # Process attendance date
-            attendance_df["Date"] = pd.to_datetime(attendance_df["Date"], errors='coerce')
+    if student_id_filter:
+        df_sorted = df_sorted[df_sorted["Student ID"].astype(str).str.contains(student_id_filter, case=False, na=False)]
+    if student_name_filter:
+        df_sorted = df_sorted[df_sorted["Student Name"].str.contains(student_name_filter, case=False, na=False)]
+    if faculty_filter:
+        df_sorted = df_sorted[df_sorted["Faculty"].str.contains(faculty_filter, case=False, na=False)]
 
-            # Load extra session data
-            extra_session_df = pd.read_excel(extra_session_file, skiprows=6, engine=get_engine(extra_session_file))
-            extra_session_df.columns = extra_session_df.columns.str.strip()
-            if "Extra Session Attendance Date" not in extra_session_df.columns or "Student ID" not in extra_session_df.columns:
-                st.error("Error: Required columns not found in Extra Session File.")
-                return
-            
-            # Process extra session date
-            extra_session_df["Extra Session Attendance Date"] = pd.to_datetime(extra_session_df["Extra Session Attendance Date"], errors='coerce')
+    st.sidebar.write("### Select Columns to Display")
+    selected_columns = st.sidebar.multiselect("Choose columns", df_sorted.columns.tolist(), default=df_sorted.columns.tolist())
 
-            # Sidebar - Batch Filter
-            st.sidebar.write("### Filter Options")
-            batches = attendance_df["Batch"].dropna().unique()
-            selected_batch = st.sidebar.selectbox("Select Batch", options=sorted(batches))
+    st.write("### Sorted, Filtered, and Selected Columns Attendance Record:")
+    st.dataframe(df_sorted[selected_columns], width=1500)
 
-            # Sidebar - Student ID Filter
-            student_ids = attendance_df["Student ID"].dropna().unique()
-            selected_student_id = st.sidebar.selectbox("Select Student ID", options=["All"] + list(sorted(student_ids)))
+    summary_df = df.drop_duplicates(subset=["Student ID", "Date"]).groupby(["Student ID", "Student Name"], as_index=False).agg(Classes_Taken=("Date", "count"))
+    st.write("### Summary: Student Attendance Record")
+    st.dataframe(summary_df, width=800)
 
-            # Filter attendance and extra sessions for selected batch
-            batch_attendance = attendance_df[attendance_df["Batch"] == selected_batch]
-            batch_extra_sessions = extra_session_df[extra_session_df["Batch"] == selected_batch]
+def generate_batch_reports(attendance_df, extra_session_df):
+    st.sidebar.write("### Batch & Student Filters")
 
-            # Apply Student ID filter
-            if selected_student_id != "All":
-                batch_attendance = batch_attendance[batch_attendance["Student ID"] == selected_student_id]
-                batch_extra_sessions = batch_extra_sessions[batch_extra_sessions["Student ID"] == selected_student_id]
+    batches = sorted(attendance_df["Batch"].dropna().unique().tolist())
+    selected_batch = st.sidebar.selectbox("Select Batch", options=["All"] + batches)
 
-            if batch_attendance.empty:
-                st.warning("No attendance records found for the selected Batch or Student ID.")
-                return
+    student_ids = sorted(attendance_df["Student ID"].dropna().unique().tolist())
+    selected_student_id = st.sidebar.selectbox("Select Student ID", options=["All"] + student_ids)
 
-            # Prepare month-wise attendance
-            output = {}
-            batch_attendance_nodup = batch_attendance.drop_duplicates(subset=["Student ID", "Date"])
+    # Filter by batch if not 'All'
+    if selected_batch != "All":
+        attendance_df = attendance_df[attendance_df["Batch"] == selected_batch]
+        extra_session_df = extra_session_df[extra_session_df["Batch"] == selected_batch]
 
-            months = batch_attendance_nodup["Date"].dt.to_period("M").dropna().unique()
+    if selected_student_id != "All":
+        attendance_df = attendance_df[attendance_df["Student ID"] == selected_student_id]
+        extra_session_df = extra_session_df[extra_session_df["Student ID"] == selected_student_id]
 
-            for month in months:
-                month_str = month.strftime("%B-%Y")
-                month_df = batch_attendance_nodup[batch_attendance_nodup["Date"].dt.to_period("M") == month]
+    if attendance_df.empty:
+        st.warning("No attendance data found for selected filters.")
+        return
 
-                # Prepare list of dates for the month
-                start_date = pd.Timestamp(month.start_time)
-                end_date = pd.Timestamp(month.end_time)
-                date_range = pd.date_range(start=start_date, end=end_date)
+    attendance_df_nodup = attendance_df.drop_duplicates(subset=["Student ID", "Date"])
+    months = attendance_df_nodup["Date"].dt.to_period("M").dropna().unique()
 
-                # Prepare pivot table
-                students = month_df[["Student ID", "Student Name"]].drop_duplicates()
+    output = {}
+    for month in months:
+        month_str = month.strftime("%B-%Y")
+        month_df = attendance_df_nodup[attendance_df_nodup["Date"].dt.to_period("M") == month]
 
-                pivot_df = students.copy()
-                for date in date_range:
-                    pivot_df[date.strftime("%-d-%b")] = ""
+        start_date, end_date = pd.Timestamp(month.start_time), pd.Timestamp(month.end_time)
+        date_range = pd.date_range(start=start_date, end=end_date)
 
-                # Mark attendance
-                for idx, row in month_df.iterrows():
-                    student_id = row["Student ID"]
-                    date_col = row["Date"].strftime("%-d-%b")
-                    pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "."
+        students = month_df[["Student ID", "Student Name"]].drop_duplicates()
+        pivot_df = students.copy()
+        for date in date_range:
+            pivot_df[date.strftime("%-d-%b")] = "A"
 
-                # Mark extra session attendance
-                for idx, row in batch_extra_sessions.iterrows():
-                    student_id = row["Student ID"]
-                    date = row["Extra Session Attendance Date"]
-                    if pd.isna(date):
-                        continue
-                    if date.to_period("M") == month:
-                        date_col = date.strftime("%-d-%b")
-                        if date_col in pivot_df.columns:
-                            pivot_df.loc[pivot_df["Student ID"] == student_id, date_col] = "E"
+        for _, row in month_df.iterrows():
+            date_col = row["Date"].strftime("%-d-%b")
+            pivot_df.loc[pivot_df["Student ID"] == row["Student ID"], date_col] = "P"
 
-                output[month_str] = pivot_df
+        for _, row in extra_session_df.iterrows():
+            if pd.isna(row["Extra Session Attendance Date"]): continue
+            if row["Extra Session Attendance Date"].to_period("M") != month: continue
+            date_col = row["Extra Session Attendance Date"].strftime("%-d-%b")
+            if date_col in pivot_df.columns:
+                pivot_df.loc[pivot_df["Student ID"] == row["Student ID"], date_col] = "E"
 
-            # Create Excel file for download
-            excel_buffer = BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                for month, df_month in output.items():
-                    df_month.to_excel(writer, sheet_name=month[:31], index=False)
-            excel_buffer.seek(0)
+        output[month_str] = pivot_df
 
-            # Provide download button
-            st.success("Processed Successfully! Ready for download.")
-            st.download_button(
-                label="Download Batch Attendance Excel",
-                data=excel_buffer,
-                file_name=f"{selected_batch}_Attendance.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    # Export Excel
+    excel_buffer = BytesIO()
+    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+        for sheet_name, sheet_df in output.items():
+            sheet_df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
+    excel_buffer.seek(0)
 
-            # Show the attendance data for UI with duplicates and extra sessions marked
-            st.write("### Attendance and Extra Session Data (UI)")
+    st.success("Processed Successfully! Ready for download.")
+    filename = f"{selected_batch if selected_batch != 'All' else 'AllBatches'}_Attendance.xlsx"
+    st.download_button("Download Attendance Excel", data=excel_buffer, file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-            # Compute duplicate and unique attendance counts
-            batch_attendance["duplicate_attendance_count"] = batch_attendance.groupby("Student ID")["Student ID"].transform("count")
-            batch_attendance["unique_attendance_count"] = batch_attendance.drop_duplicates(subset=["Student ID", "Date"]).groupby("Student ID")["Date"].transform("count")
+    # Show Data on UI
+    attendance_df["duplicate_attendance_count"] = attendance_df.groupby("Student ID")["Student ID"].transform("count")
+    attendance_df["unique_attendance_count"] = attendance_df.drop_duplicates(subset=["Student ID", "Date"]).groupby("Student ID")["Date"].transform("count")
+    st.write(f"### Attendance Data - Batch: {selected_batch} | Student ID: {selected_student_id}")
+    st.dataframe(attendance_df)
 
-            # Show the filtered and processed attendance data in UI
-            st.write(f"### Filtered Attendance Data for Batch: {selected_batch} and Student ID: {selected_student_id}")
-            st.dataframe(batch_attendance)
+def main():
+    st.title("Student Attendance System")
+    st.write("Upload the Main Attendance file and optionally an Extra Session Attendance file.")
 
-        except Exception as e:
-            st.error(f"An error occurred: {e}")
+    tab1, tab2 = st.tabs(["Batch-wise Export", "Real-time Filter View"])
 
-# Streamlit UI
-st.title("Student Attendance Processor with Extra Sessions")
-st.write("Upload the Main Attendance file and the Extra Sessions file to generate batch-wise month-wise attendance.")
+    with tab1:
+        attendance_file = st.file_uploader("Upload Main Attendance File", type=["xls", "xlsx"], key="main")
+        extra_file = st.file_uploader("Upload Extra Session Attendance File (Optional)", type=["xls", "xlsx"], key="extra")
 
-attendance_file = st.file_uploader("Upload Main Attendance File", type=["xls", "xlsx"])
-extra_session_file = st.file_uploader("Upload Extra Session Attendance File", type=["xls", "xlsx"])
+        if attendance_file:
+            attendance_df = load_excel(attendance_file, skiprows=6)
+            attendance_df = attendance_df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in attendance_df.columns], errors='ignore')
+            attendance_df = attendance_df.rename(columns=lambda x: x.strip())
+            attendance_df["Date"] = pd.to_datetime(attendance_df["Date"], errors="coerce")
 
-if attendance_file and extra_session_file:
-    process_attendance(attendance_file, extra_session_file)
+            extra_df = None
+            if extra_file:
+                extra_df = load_excel(extra_file, skiprows=4)
+                extra_df["Extra Session Attendance Date"] = pd.to_datetime(extra_df["Extra Session Attendance Date"], errors="coerce")
+            else:
+                extra_df = pd.DataFrame(columns=["Student ID", "Extra Session Attendance Date", "Batch"])
 
-# Footer
-st.markdown("---")
-st.markdown("<p style='text-align: center;'>Developed with ❤️ by Syed Aun Muhammad</p>", unsafe_allow_html=True)
+            generate_batch_reports(attendance_df, extra_df)
+
+    with tab2:
+        file = st.file_uploader("Upload File to View and Filter", type=["xls", "xlsx"], key="sort")
+        if file:
+            df = load_excel(file, skiprows=6)
+            df = df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in df.columns], errors='ignore')
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            display_filtered_attendance(df)
+
+    st.markdown("---")
+    st.markdown("<p style='text-align: center;'>Developed with ❤️ by Syed Aun Muhammad</p>", unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
