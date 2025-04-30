@@ -86,7 +86,17 @@ def generate_batch_reports(attendance_df, extra_session_df):
             if date_col in pivot_df.columns:
                 pivot_df.loc[pivot_df["Student ID"] == row["Student ID"], date_col] = "E"
 
+        # Count total P and E per student
+        attendance_counts = (pivot_df == "P").sum(axis=1) + (pivot_df == "E").sum(axis=1)
+        pivot_df["Total Attendance"] = attendance_counts
+
+        # Move 'Total Attendance' right after Student Name
+        cols = pivot_df.columns.tolist()
+        cols.insert(2, cols.pop(cols.index("Total Attendance")))
+        pivot_df = pivot_df[cols]
+
         output[month_str] = pivot_df
+
 
     # Export Excel
     excel_buffer = BytesIO()
