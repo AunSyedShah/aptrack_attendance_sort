@@ -5,11 +5,12 @@ from io import BytesIO
 
 st.set_page_config(layout="wide")
 
-def clean_and_parse_date(date_series):
-    cleaned = date_series.astype(str).str.strip().str.title()
-    cleaned = cleaned.str.replace(r'\bSept\b', 'Sep', regex=True)
-    cleaned = cleaned.str.replace(r'\bJuly\b', 'Jul', regex=True)
-    return pd.to_datetime(cleaned, errors='coerce', dayfirst=True, infer_datetime_format=True)
+# === Robust Date Parser ===
+def parse_date_column(date_series):
+    # First, try known format like 9-Sep-2024, then fallback to auto detection
+    parsed = pd.to_datetime(date_series.astype(str).str.strip(), format="%d-%b-%Y", errors="coerce")
+    fallback = pd.to_datetime(date_series, errors="coerce")
+    return parsed.fillna(fallback)
 
 def load_excel(file, skiprows):
     file_extension = file.name.split(".")[-1].lower()
@@ -100,6 +101,7 @@ def generate_batch_reports(attendance_df, extra_session_df):
 
         output[month_str] = pivot_df
 
+    # Export Excel
     excel_buffer = BytesIO()
     with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
         for sheet_name, sheet_df in output.items():
@@ -129,11 +131,11 @@ def main():
             attendance_df = load_excel(attendance_file, skiprows=6)
             attendance_df = attendance_df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in attendance_df.columns], errors='ignore')
             attendance_df = attendance_df.rename(columns=lambda x: x.strip())
-            attendance_df["Date"] = clean_and_parse_date(attendance_df["Date"])
+            attendance_df["Date"] = parse_date_column(attendance_df["Date"])
 
             if extra_file:
                 extra_df = load_excel(extra_file, skiprows=4)
-                extra_df["Extra Session Attendance Date"] = clean_and_parse_date(extra_df["Extra Session Attendance Date"])
+                extra_df["Extra Session Attendance Date"] = parse_date_column(extra_df["Extra Session Attendance Date"])
             else:
                 extra_df = pd.DataFrame(columns=["Student ID", "Extra Session Attendance Date", "Batch"])
 
@@ -144,7 +146,7 @@ def main():
         if file:
             df = load_excel(file, skiprows=6)
             df = df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in df.columns], errors='ignore')
-            df["Date"] = clean_and_parse_date(df["Date"])
+            df["Date"] = parse_date_column(df["Date"])
             display_filtered_attendance(df)
 
     st.markdown("---")
