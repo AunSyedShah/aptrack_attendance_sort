@@ -1,156 +1,118 @@
-import pandas as pd
 import streamlit as st
-import numpy as np
-from io import BytesIO
+import pandas as pd
 
-st.set_page_config(layout="wide")
+# Page Configuration
+st.set_page_config(page_title="Student Attendance Portal", layout="wide")
+st.title("📊 Student Attendance Dashboard")
 
-# === Robust Date Parser ===
-def parse_date_column(date_series):
-    # First, try known format like 9-Sep-2024, then fallback to auto detection
-    parsed = pd.to_datetime(date_series.astype(str).str.strip(), format="%d-%b-%Y", errors="coerce")
-    fallback = pd.to_datetime(date_series, errors="coerce")
-    return parsed.fillna(fallback)
-
-def load_excel(file, skiprows):
-    file_extension = file.name.split(".")[-1].lower()
-    engine = "xlrd" if file_extension == "xls" else "openpyxl"
-    df = pd.read_excel(file, skiprows=skiprows, engine=engine)
-    df.columns = df.columns.str.strip()
+@st.cache_data
+def load_data(file):
+    df = pd.read_csv(file)
+    # Parse DD/MM/YYYY dates for chronological ordering
+    df['ParsedDate'] = pd.to_datetime(df['AttendanceDate'], format='%d/%m/%Y', errors='coerce')
     return df
 
-def display_filtered_attendance(df):
-    st.sidebar.write("### Filter Options")
-    student_id_filter = st.sidebar.text_input("Filter by Student ID")
-    student_name_filter = st.sidebar.text_input("Filter by Student Name")
-    faculty_filter = st.sidebar.text_input("Filter by Faculty")
+# Upload or fallback to local file
+uploaded_file = st.sidebar.file_uploader("Upload Student Attendance CSV", type=["csv"])
+file_to_load = uploaded_file if uploaded_file is not None else "StudentAttendanceReport (4).csv"
 
-    df_sorted = df.sort_values(by=["Student ID", "Student Name"], ascending=True)
+try:
+    df = load_data(file_to_load)
+    
+    # Sidebar quick filters
+    st.sidebar.header("Global Filters")
+    courses = ["All"] + sorted(df['CourseName'].dropna().unique().tolist())
+    selected_course = st.sidebar.selectbox("Filter by Course", courses)
+    
+    if selected_course != "All":
+        df = df[df['CourseName'] == selected_course]
 
-    if student_id_filter:
-        df_sorted = df_sorted[df_sorted["Student ID"].astype(str).str.contains(student_id_filter, case=False, na=False)]
-    if student_name_filter:
-        df_sorted = df_sorted[df_sorted["Student Name"].str.contains(student_name_filter, case=False, na=False)]
-    if faculty_filter:
-        df_sorted = df_sorted[df_sorted["Faculty"].str.contains(faculty_filter, case=False, na=False)]
+    tab1, tab2 = st.tabs([
+        "📅 Student-wise Attendance (Ordered by Date)", 
+        "🔢 Unique Attendance Count per Student"
+    ])
 
-    st.sidebar.write("### Select Columns to Display")
-    selected_columns = st.sidebar.multiselect("Choose columns", df_sorted.columns.tolist(), default=df_sorted.columns.tolist())
-
-    st.write("### Sorted, Filtered, and Selected Columns Attendance Record:")
-    st.dataframe(df_sorted[selected_columns], width=1500)
-
-    summary_df = df.drop_duplicates(subset=["Student ID", "Date"]).groupby(["Student ID", "Student Name"], as_index=False).agg(Classes_Taken=("Date", "count"))
-    st.write("### Summary: Student Attendance Record")
-    st.dataframe(summary_df, width=800)
-
-def generate_batch_reports(attendance_df, extra_session_df):
-    st.sidebar.write("### Batch & Student Filters")
-
-    batches = sorted(attendance_df["Batch"].dropna().unique().tolist())
-    selected_batch = st.sidebar.selectbox("Select Batch", options=["All"] + batches)
-
-    student_ids = sorted(attendance_df["Student ID"].dropna().unique().tolist())
-    selected_student_id = st.sidebar.selectbox("Select Student ID", options=["All"] + student_ids)
-
-    if selected_batch != "All":
-        attendance_df = attendance_df[attendance_df["Batch"] == selected_batch]
-        extra_session_df = extra_session_df[extra_session_df["Batch"] == selected_batch]
-
-    if selected_student_id != "All":
-        attendance_df = attendance_df[attendance_df["Student ID"] == selected_student_id]
-        extra_session_df = extra_session_df[extra_session_df["Student ID"] == selected_student_id]
-
-    if attendance_df.empty:
-        st.warning("No attendance data found for selected filters.")
-        return
-
-    attendance_df_nodup = attendance_df.drop_duplicates(subset=["Student ID", "Date"])
-    months = attendance_df_nodup["Date"].dt.to_period("M").dropna().unique()
-
-    output = {}
-    for month in months:
-        month_str = month.strftime("%B-%Y")
-        month_df = attendance_df_nodup[attendance_df_nodup["Date"].dt.to_period("M") == month]
-
-        start_date, end_date = pd.Timestamp(month.start_time), pd.Timestamp(month.end_time)
-        date_range = pd.date_range(start=start_date, end=end_date)
-
-        students = month_df[["Student ID", "Student Name"]].drop_duplicates()
-        pivot_df = students.copy()
-        for date in date_range:
-            pivot_df[date.strftime("%-d-%b")] = "A"
-
-        for _, row in month_df.iterrows():
-            date_col = row["Date"].strftime("%-d-%b")
-            pivot_df.loc[pivot_df["Student ID"] == row["Student ID"], date_col] = "P"
-
-        for _, row in extra_session_df.iterrows():
-            if pd.isna(row["Extra Session Attendance Date"]): continue
-            if row["Extra Session Attendance Date"].to_period("M") != month: continue
-            date_col = row["Extra Session Attendance Date"].strftime("%-d-%b")
-            if date_col in pivot_df.columns:
-                pivot_df.loc[pivot_df["Student ID"] == row["Student ID"], date_col] = "E"
-
-        attendance_counts = (pivot_df == "P").sum(axis=1) + (pivot_df == "E").sum(axis=1)
-        pivot_df["Total Attendance"] = attendance_counts
-
-        cols = pivot_df.columns.tolist()
-        cols.insert(2, cols.pop(cols.index("Total Attendance")))
-        pivot_df = pivot_df[cols]
-
-        output[month_str] = pivot_df
-
-    # Export Excel
-    excel_buffer = BytesIO()
-    with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-        for sheet_name, sheet_df in output.items():
-            sheet_df.to_excel(writer, sheet_name=sheet_name[:31], index=False)
-    excel_buffer.seek(0)
-
-    st.success("Processed Successfully! Ready for download.")
-    filename = f"{selected_batch if selected_batch != 'All' else 'AllBatches'}_Attendance.xlsx"
-    st.download_button("Download Attendance Excel", data=excel_buffer, file_name=filename, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-    attendance_df["duplicate_attendance_count"] = attendance_df.groupby("Student ID")["Student ID"].transform("count")
-    attendance_df["unique_attendance_count"] = attendance_df.drop_duplicates(subset=["Student ID", "Date"]).groupby("Student ID")["Date"].transform("count")
-    st.write(f"### Attendance Data - Batch: {selected_batch} | Student ID: {selected_student_id}")
-    st.dataframe(attendance_df)
-
-def main():
-    st.title("Student Attendance System")
-    st.write("Upload the Main Attendance file and optionally an Extra Session Attendance file.")
-
-    tab1, tab2 = st.tabs(["Batch-wise Export", "Real-time Filter View"])
-
+    # -------------------------------------------------------------
+    # TAB 1: Student-wise Attendance Grouped & Ordered by Date
+    # -------------------------------------------------------------
     with tab1:
-        attendance_file = st.file_uploader("Upload Main Attendance File", type=["xls", "xlsx"], key="main")
-        extra_file = st.file_uploader("Upload Extra Session Attendance File (Optional)", type=["xls", "xlsx"], key="extra")
+        st.subheader("Student Attendance History")
+        
+        # Student selection dropdown for detailed drill-down
+        student_list = df[['StudentID', 'StudentName']].drop_duplicates().sort_values('StudentID')
+        student_options = ["All Students"] + [
+            f"{row['StudentID']} - {row['StudentName']}" for _, row in student_list.iterrows()
+        ]
+        
+        selected_student = st.selectbox("Select a Student to Filter (or view all)", student_options)
 
-        if attendance_file:
-            attendance_df = load_excel(attendance_file, skiprows=6)
-            attendance_df = attendance_df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in attendance_df.columns], errors='ignore')
-            attendance_df = attendance_df.rename(columns=lambda x: x.strip())
-            attendance_df["Date"] = parse_date_column(attendance_df["Date"])
+        # Sort strictly by StudentID and chronological Date
+        sorted_df = df.sort_values(by=['StudentID', 'ParsedDate'], ascending=[True, True])
+        
+        display_columns = [
+            'StudentID', 'StudentName', 'AttendanceDate', 'TimeSlotDesc', 
+            'CourseName', 'ModuleName', 'SessionName', 'EmployeeName'
+        ]
 
-            if extra_file:
-                extra_df = load_excel(extra_file, skiprows=4)
-                extra_df["Extra Session Attendance Date"] = parse_date_column(extra_df["Extra Session Attendance Date"])
-            else:
-                extra_df = pd.DataFrame(columns=["Student ID", "Extra Session Attendance Date", "Batch"])
+        if selected_student != "All Students":
+            target_id = selected_student.split(" - ")[0]
+            filtered_df = sorted_df[sorted_df['StudentID'] == target_id]
+            st.write(f"Showing **{len(filtered_df)}** records for **{selected_student}**:")
+            st.dataframe(filtered_df[display_columns], use_container_width=True, hide_index=True)
+        else:
+            st.write(f"Displaying **{len(sorted_df):,}** records grouped by StudentID and ordered by date:")
+            st.dataframe(sorted_df[display_columns], use_container_width=True, hide_index=True)
 
-            generate_batch_reports(attendance_df, extra_df)
-
+    # -------------------------------------------------------------
+    # TAB 2: Unique Day Attendance Count per Student
+    # -------------------------------------------------------------
     with tab2:
-        file = st.file_uploader("Upload File to View and Filter", type=["xls", "xlsx"], key="sort")
-        if file:
-            df = load_excel(file, skiprows=6)
-            df = df.drop(columns=[col for col in ["Sr. No.", "Center", "Student Signature", "Remark"] if col in df.columns], errors='ignore')
-            df["Date"] = parse_date_column(df["Date"])
-            display_filtered_attendance(df)
+        st.subheader("Attendance Aggregation (Deduplicated by Date)")
+        st.caption("Counts unique calendar attendance dates as single presence (ignoring same-day multiple sessions).")
 
-    st.markdown("---")
-    st.markdown("<p style='text-align: center;'>Developed with ❤️ by Syed Aun Muhammad</p>", unsafe_allow_html=True)
+        summary_df = (
+            df.groupby(['StudentID', 'StudentName'])
+            .agg(
+                Unique_Days_Attended=('AttendanceDate', 'nunique'),
+                Total_Session_Records=('AttendanceDate', 'count')
+            )
+            .reset_index()
+            .sort_values(by='Unique_Days_Attended', ascending=False)
+        )
 
-if __name__ == "__main__":
-    main()
+        # Quick metric indicators
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total Unique Students", len(summary_df))
+        col2.metric("Max Days Attended", summary_df['Unique_Days_Attended'].max())
+        col3.metric("Avg Days Attended", f"{summary_df['Unique_Days_Attended'].mean():.1f}")
+
+        # Search bar within summary table
+        search_query = st.text_input("🔍 Search by Student ID or Name", "")
+        if search_query:
+            summary_df = summary_df[
+                summary_df['StudentID'].str.contains(search_query, case=False, na=False) |
+                summary_df['StudentName'].str.contains(search_query, case=False, na=False)
+            ]
+
+        st.dataframe(
+            summary_df.rename(columns={
+                'StudentID': 'Student ID',
+                'StudentName': 'Student Name',
+                'Unique_Days_Attended': 'Distinct Days Present',
+                'Total_Session_Records': 'Total Recorded Sessions'
+            }),
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # Download button
+        csv_download = summary_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Download Unique Attendance Summary (CSV)",
+            data=csv_download,
+            file_name="Student_Unique_Attendance_Summary.csv",
+            mime="text/csv"
+        )
+
+except FileNotFoundError:
+    st.error("Could not find the dataset. Please upload `StudentAttendanceReport (4).csv` using the sidebar uploader.")
